@@ -1717,6 +1717,8 @@ inline void commit_translated_rtns_to_tc()
     }
 }
 
+bool tc_created_successfully = false;
+
 /**********************************************/
 /* start_stop_profile_gathering_thread_func() */
 /**********************************************/
@@ -1726,6 +1728,11 @@ void start_stop_profile_gathering_thread_func(void *v)
     // execution frequency for each BBL.
     cerr << " prof time: " << dec << KnobNumSecsDuringProfile << " sec\n";
     sleep(KnobNumSecsDuringProfile);
+
+    if (!tc_created_successfully) {
+        cerr << "TC creation aborted or incomplete, not disabling profiling.\n";
+        return;
+    }
 
     cerr << "disabling profile gathering\n";
 
@@ -2001,6 +2008,8 @@ VOID create_tc(IMG img, VOID *v)
     cerr << " create_tc took: " << elapsed << " seconds\n";
 
 	clock_gettime(CLOCK_MONOTONIC, &start_running_time);
+    
+    tc_created_successfully = true;
 }
 
 
