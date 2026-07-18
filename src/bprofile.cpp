@@ -1228,8 +1228,10 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
     // and indirectly jmp/call via that memory location.
 
     // search for orig_targ_addr in jump_to_orig_addr_map.
+    // Search for the original target address in jump_to_orig_addr_map.
+    // Note: jump_to_orig_addr_map is 1-indexed because jump_to_orig_addr_num is incremented before assignment.
     int jump_to_orig_addr_map_entry = -1;
-    for (unsigned i = 0; i < jump_to_orig_addr_num; i++) {
+    for (unsigned i = 1; i <= jump_to_orig_addr_num; i++) {
       if (instr_map[instr_map_entry].orig_targ_addr == jump_to_orig_addr_map[i]) {
         jump_to_orig_addr_map_entry = i;
         break;
@@ -1246,24 +1248,6 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
     }
 
     if (category_enum == XED_CATEGORY_COND_BR) {
-        if (instr_map[instr_map_entry].size == 8) {
-            // Already converted in a previous pass. Re-calculate displacement for the JMP.
-            xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                                   (instr_map[instr_map_entry].new_ins_addr + 8);
-            if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
-                cerr << "Invalid rip displacement for converted COND_BR\n";
-                return -1;
-            }
-            xed_encoder_instruction_t enc_jmp;
-            xed_inst1(&enc_jmp, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(new_disp, 32), 64));
-            xed_encoder_request_t req_jmp;
-            xed_encoder_request_zero_set_mode(&req_jmp, &dstate);
-            xed_convert_to_encoder_request(&req_jmp, &enc_jmp);
-            unsigned int olen_jmp = 0;
-            xed_encode(&req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + 2), 15 - 2, &olen_jmp);
-            return 8;
-        } else {
-            // First time seeing this COND_BR. We convert it to a trampoline.
             xed_iclass_enum_t iclass = xed_decoded_inst_get_iclass(&xedd);
             xed_iclass_enum_t inv_iclass = XED_ICLASS_INVALID;
             switch(iclass) {
@@ -1313,7 +1297,6 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
             xed_encode(&req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_jcc), 15 - olen_jcc, &olen_jmp);
             
             return olen_jcc + olen_jmp;
-        }
     }
 
     xed_encoder_instruction_t  enc_instr;
