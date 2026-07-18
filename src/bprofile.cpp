@@ -1532,8 +1532,8 @@ int find_candidate_rtns_for_tc(IMG img)
             // Keep the entry num of the rtn head in case we need to
             // revert the insertin of the instruction in rtn into the instructions
             // map due to an invalid decoding.
-            unsigned rtn_entry = num_of_instr_map_entries;
-            unsigned prev_bbl_num = bbl_num;
+            //unsigned rtn_entry = num_of_instr_map_entries;
+            //unsigned prev_bbl_num = bbl_num;
 
             //if (RTN_Name(rtn) == ".plt")
             //    continue;
