@@ -272,15 +272,21 @@ static unsigned g_opt_applied = 0;   // # of BBLs the dead-reg opt has been appl
 // CFG past 'ins': the general cross-block version corrupts cc1 (a real, elusive
 // liveness error - reproduces even with the disable off), so we keep the
 // provably-safe case.
-static bool is_reg_free_before(INS ins, REG reg)
+static bool is_reg_free_before(INS ins, REG reg, std::map<ADDRINT, bool>& is_targ_map)
 {
-    if (isJumpOrRet(ins) || INS_IsCall(ins) || INS_IsSyscall(ins))
-        return false;
-    if (INS_IsPredicated(ins))
-        return false;
-    if (reads_reg_incl_mem(ins, reg))
-        return false;
-    return writes_full_reg(ins, reg);
+    for (INS cur = ins; INS_Valid(cur); cur = INS_Next(cur)) {
+        if (isJumpOrRet(cur) || INS_IsCall(cur) || INS_IsSyscall(cur))
+            return false;
+        if (reads_reg_incl_mem(cur, reg))
+            return false;
+        if (!INS_IsPredicated(cur) && writes_full_reg(cur, reg))
+            return true;
+        // Check if the next instruction is a jump target (end of basic block)
+        INS next_ins = INS_Next(cur);
+        if (INS_Valid(next_ins) && is_targ_map[INS_Address(next_ins)])
+            return false;
+    }
+    return false;
 }
 
 int create_nop7_xedd_instr(xed_decoded_inst_t *xedd)
@@ -741,7 +747,8 @@ int add_new_encoded_instr(ADDRINT ins_addr, xed_encoder_instruction_t *enc_instr
 /* add_profiling_instrs() */
 /**************************/
 int add_profiling_instrs(INS ins, ADDRINT ins_addr,
-                         UINT64 *counter_addr, unsigned bbl_num)
+                         UINT64 *counter_addr, unsigned bbl_num,
+                         std::map<ADDRINT, bool>& is_targ_map)
 {
   xed_encoder_instruction_t enc_instr;
 
@@ -756,7 +763,7 @@ int add_profiling_instrs(INS ins, ADDRINT ins_addr,
   bool has_indirect = (!KnobNoIndirectProfile) && INS_IsIndirectControlFlow(ins)
                       && !INS_IsRet(ins) && !INS_IsCall(ins);
   bool rax_dead = (!KnobNoDeadRegOpt) && (!has_indirect)
-                  && is_reg_free_before(ins, LEVEL_BASE::REG_RAX);
+                  && is_reg_free_before(ins, LEVEL_BASE::REG_RAX, is_targ_map);
   // Bisection support: only apply the optimization to the first N eligible BBLs.
   if (rax_dead) {
     if (g_opt_applied >= (unsigned)KnobDeadRegLimit) {
@@ -1545,7 +1552,7 @@ int find_candidate_rtns_for_tc(IMG img)
                   // Do not insert the profiling now if there is a later instr
                   // in the BBL that kills RAX.
                   if (isInsTerminatesBBL) {
-                    rc = add_profiling_instrs(ins, ins_addr, &bbl_map[bbl_num].counter, bbl_num);
+                    rc = add_profiling_instrs(ins, ins_addr, &bbl_map[bbl_num].counter, bbl_num, is_targ_map);
                     if (rc < 0)
                       return -1;
                   }
@@ -1579,7 +1586,7 @@ int find_candidate_rtns_for_tc(IMG img)
                 //     and before the next BBL.
                 if (!KnobNoProfile && INS_Category(ins) == XED_CATEGORY_COND_BR) {
                   rc = add_profiling_instrs(ins, ins_addr,
-                                            &bbl_map[bbl_num - 1].fallthru_counter, bbl_num-1);
+                                            &bbl_map[bbl_num - 1].fallthru_counter, bbl_num-1, is_targ_map);
                   if (rc < 0)
                     return -1;
                 }
