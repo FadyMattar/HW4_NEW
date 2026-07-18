@@ -1,0 +1,9 @@
+# Builds bprofile.so from bprofile.cpp
+TEST_TOOL_ROOTS := bprofile
+
+TOOL_ROOTS :=
+SA_TOOL_ROOTS :=
+APP_ROOTS :=
+OBJECT_ROOTS :=
+DLL_ROOTS :=
+LIB_ROOTS :=

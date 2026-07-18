@@ -1,0 +1,10 @@
+# Test targets
+TEST_TOOL_ROOTS := btranslate
+
+# Default rules
+TOOL_ROOTS :=
+SA_TOOL_ROOTS :=
+APP_ROOTS :=
+OBJECT_ROOTS :=
+DLL_ROOTS :=
+LIB_ROOTS :=
