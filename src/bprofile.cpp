@@ -274,19 +274,10 @@ static unsigned g_opt_applied = 0;   // # of BBLs the dead-reg opt has been appl
 // provably-safe case.
 static bool is_reg_free_before(INS ins, REG reg, std::map<ADDRINT, bool>& is_targ_map)
 {
-    for (INS cur = ins; INS_Valid(cur); cur = INS_Next(cur)) {
-        if (isJumpOrRet(cur) || INS_IsCall(cur) || INS_IsSyscall(cur))
-            return false;
-        if (reads_reg_incl_mem(cur, reg))
-            return false;
-        if (!INS_IsPredicated(cur) && writes_full_reg(cur, reg))
-            return true;
-        // Check if the next instruction is a jump target (end of basic block)
-        INS next_ins = INS_Next(cur);
-        if (INS_Valid(next_ins) && is_targ_map[INS_Address(next_ins)])
-            return false;
-    }
-    return false;
+    if (isJumpOrRet(ins) || INS_IsCall(ins) || INS_IsSyscall(ins)) return false;
+    if (INS_IsPredicated(ins)) return false;
+    if (reads_reg_incl_mem(ins, reg)) return false;
+    return writes_full_reg(ins, reg);
 }
 
 int create_nop7_xedd_instr(xed_decoded_inst_t *xedd)
@@ -1272,18 +1263,28 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
                     return -1;
             }
             
-            // Encode the inverted condition to jump over the JMP (which is 6 bytes)
+            // First pass: Encode JMP with dummy displacement to find its length
+            xed_encoder_instruction_t enc_jmp_dummy;
+            xed_inst1(&enc_jmp_dummy, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(0, 32), 64));
+            xed_encoder_request_t req_jmp_dummy;
+            xed_encoder_request_zero_set_mode(&req_jmp_dummy, &dstate);
+            xed_convert_to_encoder_request(&req_jmp_dummy, &enc_jmp_dummy);
+            unsigned int olen_jmp = 0;
+            UINT8 dummy_buf[15];
+            xed_encode(&req_jmp_dummy, dummy_buf, 15, &olen_jmp);
+            
+            // Encode the inverted condition to jump over the JMP
             xed_encoder_instruction_t enc_jcc;
-            xed_inst1(&enc_jcc, dstate, inv_iclass, 64, xed_relbr(6, 8));
+            xed_inst1(&enc_jcc, dstate, inv_iclass, 64, xed_relbr(olen_jmp, 8));
             xed_encoder_request_t req_jcc;
             xed_encoder_request_zero_set_mode(&req_jcc, &dstate);
             xed_convert_to_encoder_request(&req_jcc, &enc_jcc);
             unsigned int olen_jcc = 0;
             xed_encode(&req_jcc, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), 15, &olen_jcc);
             
-            // Encode the JMP
+            // Second pass: Encode JMP with correct displacement
             xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                                   (instr_map[instr_map_entry].new_ins_addr + olen_jcc + 6);
+                                   (instr_map[instr_map_entry].new_ins_addr + olen_jcc + olen_jmp);
             if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
                 cerr << "Invalid rip displacement for converted COND_BR\n";
                 return -1;
@@ -1293,33 +1294,34 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
             xed_encoder_request_t req_jmp;
             xed_encoder_request_zero_set_mode(&req_jmp, &dstate);
             xed_convert_to_encoder_request(&req_jmp, &enc_jmp);
-            unsigned int olen_jmp = 0;
-            xed_encode(&req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_jcc), 15 - olen_jcc, &olen_jmp);
+            unsigned int olen_jmp_final = 0;
+            xed_encode(&req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_jcc), 15 - olen_jcc, &olen_jmp_final);
             
-            return olen_jcc + olen_jmp;
+            return olen_jcc + olen_jmp_final;
     }
+
+    xed_encoder_instruction_t  enc_instr_dummy;
+    xed_iclass_enum_t iclass_jmp_call = (category_enum == XED_CATEGORY_CALL) ? XED_ICLASS_CALL_NEAR : XED_ICLASS_JMP;
+    xed_inst1(&enc_instr_dummy, dstate, iclass_jmp_call, 64, xed_mem_bd(XED_REG_RIP, xed_disp(0, 32), 64));
+    xed_encoder_request_t enc_req_dummy;
+    xed_encoder_request_zero_set_mode(&enc_req_dummy, &dstate);
+    xed_convert_to_encoder_request(&enc_req_dummy, &enc_instr_dummy);
+    unsigned int olen_dummy = 0;
+    UINT8 dummy_buf[15];
+    xed_encode(&enc_req_dummy, dummy_buf, 15, &olen_dummy);
 
     xed_encoder_instruction_t  enc_instr;
     xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                       (instr_map[instr_map_entry].new_ins_addr + 6);
+                       (instr_map[instr_map_entry].new_ins_addr + olen_dummy);
     if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
         cerr << "Invalid rip displacement larger than 32 bits in fix_direct_jmp_or_call_to_orig_addr\n";
         cerr << "new displacement: " << dec << new_disp << "\n";
         return -1;
     }
 
-    if (category_enum == XED_CATEGORY_CALL)
-            xed_inst1(&enc_instr, dstate,
-            XED_ICLASS_CALL_NEAR, 64,
-            xed_mem_bd (XED_REG_RIP, xed_disp(new_disp, 32), 64));
-
-    if (category_enum == XED_CATEGORY_UNCOND_BR)
-            xed_inst1(&enc_instr, dstate,
-            XED_ICLASS_JMP, 64,
-            xed_mem_bd (XED_REG_RIP, xed_disp(new_disp, 32), 64));
+    xed_inst1(&enc_instr, dstate, iclass_jmp_call, 64, xed_mem_bd(XED_REG_RIP, xed_disp(new_disp, 32), 64));
 
     xed_encoder_request_t enc_req;
-
     xed_encoder_request_zero_set_mode(&enc_req, &dstate);
     xed_bool_t convert_ok = xed_convert_to_encoder_request(&enc_req, &enc_instr);
     if (!convert_ok) {
