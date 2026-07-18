@@ -1532,7 +1532,8 @@ int find_candidate_rtns_for_tc(IMG img)
             // Keep the entry num of the rtn head in case we need to
             // revert the insertin of the instruction in rtn into the instructions
             // map due to an invalid decoding.
-            //unsigned rtn_entry = num_of_instr_map_entries;
+            unsigned rtn_entry = num_of_instr_map_entries;
+            unsigned prev_bbl_num = bbl_num;
 
             //if (RTN_Name(rtn) == ".plt")
             //    continue;
@@ -1543,11 +1544,32 @@ int find_candidate_rtns_for_tc(IMG img)
             // Map all instructions that are a target of some direct jump or call in the rtn.
             std::map<ADDRINT, bool>is_targ_map;
             is_targ_map.empty();
+            bool has_interprocedural_cond_br = false;
             for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
                if (INS_IsDirectControlFlow(ins)) {
                  ADDRINT targ_addr = INS_DirectControlFlowTargetAddress(ins);
                  is_targ_map[targ_addr] = true;
                }
+            }
+            ADDRINT rtn_start = RTN_Address(rtn);
+            ADDRINT rtn_end = rtn_start + RTN_Size(rtn);
+            for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
+               if (INS_Category(ins) == XED_CATEGORY_COND_BR) {
+                 ADDRINT targ_addr = INS_DirectControlFlowTargetAddress(ins);
+                 if (targ_addr < rtn_start || targ_addr >= rtn_end) {
+                    has_interprocedural_cond_br = true;
+                    break;
+                 }
+               }
+            }
+
+            if (has_interprocedural_cond_br) {
+                if (KnobVerbose) {
+                    cerr << "note: untranslatable interprocedural COND_BR in routine " << RTN_Name(rtn) 
+                         << " - falling back to native execution for this routine\n";
+                }
+                RTN_Close( rtn );
+                continue;
             }
 
             for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
@@ -1912,7 +1934,9 @@ int allocate_and_init_memory(IMG img)
     addr += max_tc_size;
 
     // Allocate memory to the jump map to orig addrs which cannot be relocated.
-    jump_to_orig_addr_map = (ADDRINT *)addr;
+    unsigned int map_offset = max_ins_count * 15;
+    map_offset = (map_offset + 7) & ~7;
+    jump_to_orig_addr_map = (ADDRINT *)((char *)tc + map_offset);
 
     // Allocate memory for the instr_map table.
     instr_map = (instr_map_t *)calloc(max_ins_count, sizeof(instr_map_t));
