@@ -1486,35 +1486,13 @@ int find_candidate_rtns_for_tc(IMG img)
             // Open the RTN.
             RTN_Open( rtn );
 
-            // Map all instructions that are a target of some direct jump or call in the rtn.
             std::map<ADDRINT, bool>is_targ_map;
             is_targ_map.empty();
-            bool has_interprocedural_cond_br = false;
             for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
                if (INS_IsDirectControlFlow(ins)) {
                  ADDRINT targ_addr = INS_DirectControlFlowTargetAddress(ins);
                  is_targ_map[targ_addr] = true;
                }
-            }
-            ADDRINT rtn_start = RTN_Address(rtn);
-            ADDRINT rtn_end = rtn_start + RTN_Size(rtn);
-            for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
-               if (INS_Category(ins) == XED_CATEGORY_COND_BR) {
-                 ADDRINT targ_addr = INS_DirectControlFlowTargetAddress(ins);
-                 if (targ_addr < rtn_start || targ_addr >= rtn_end) {
-                    has_interprocedural_cond_br = true;
-                    break;
-                 }
-               }
-            }
-
-            if (has_interprocedural_cond_br) {
-                if (KnobVerbose) {
-                    cerr << "note: untranslatable interprocedural COND_BR in routine " << RTN_Name(rtn) 
-                         << " - falling back to native execution for this routine\n";
-                }
-                RTN_Close( rtn );
-                continue;
             }
 
             for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {
