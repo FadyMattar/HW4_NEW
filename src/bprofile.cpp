@@ -1238,66 +1238,11 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
       jump_to_orig_addr_map[jump_to_orig_addr_map_entry] = instr_map[instr_map_entry].orig_targ_addr;
     }
 
-    if (category_enum == XED_CATEGORY_COND_BR) {
-            xed_iclass_enum_t iclass = xed_decoded_inst_get_iclass(&xedd);
-            xed_iclass_enum_t inv_iclass = XED_ICLASS_INVALID;
-            switch(iclass) {
-                case XED_ICLASS_JB: inv_iclass = XED_ICLASS_JNB; break;
-                case XED_ICLASS_JNB: inv_iclass = XED_ICLASS_JB; break;
-                case XED_ICLASS_JBE: inv_iclass = XED_ICLASS_JNBE; break;
-                case XED_ICLASS_JNBE: inv_iclass = XED_ICLASS_JBE; break;
-                case XED_ICLASS_JL: inv_iclass = XED_ICLASS_JNL; break;
-                case XED_ICLASS_JNL: inv_iclass = XED_ICLASS_JL; break;
-                case XED_ICLASS_JLE: inv_iclass = XED_ICLASS_JNLE; break;
-                case XED_ICLASS_JNLE: inv_iclass = XED_ICLASS_JLE; break;
-                case XED_ICLASS_JZ: inv_iclass = XED_ICLASS_JNZ; break;
-                case XED_ICLASS_JNZ: inv_iclass = XED_ICLASS_JZ; break;
-                case XED_ICLASS_JS: inv_iclass = XED_ICLASS_JNS; break;
-                case XED_ICLASS_JNS: inv_iclass = XED_ICLASS_JS; break;
-                case XED_ICLASS_JP: inv_iclass = XED_ICLASS_JNP; break;
-                case XED_ICLASS_JNP: inv_iclass = XED_ICLASS_JP; break;
-                case XED_ICLASS_JO: inv_iclass = XED_ICLASS_JNO; break;
-                case XED_ICLASS_JNO: inv_iclass = XED_ICLASS_JO; break;
-                default:
-                    cerr << "note: untranslatable conditional branch iclass " << iclass << " - falling back\n";
-                    return -1;
-            }
-            
-            // First pass: Encode JMP with dummy displacement to find its length
-            xed_encoder_instruction_t enc_jmp_dummy;
-            xed_inst1(&enc_jmp_dummy, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(0, 32), 64));
-            xed_encoder_request_t req_jmp_dummy;
-            xed_encoder_request_zero_set_mode(&req_jmp_dummy, &dstate);
-            xed_convert_to_encoder_request(&req_jmp_dummy, &enc_jmp_dummy);
-            unsigned int olen_jmp = 0;
-            UINT8 dummy_buf[15];
-            xed_encode(&req_jmp_dummy, dummy_buf, 15, &olen_jmp);
-            
-            // Encode the inverted condition to jump over the JMP
-            xed_encoder_instruction_t enc_jcc;
-            xed_inst1(&enc_jcc, dstate, inv_iclass, 64, xed_relbr(olen_jmp, 8));
-            xed_encoder_request_t req_jcc;
-            xed_encoder_request_zero_set_mode(&req_jcc, &dstate);
-            xed_convert_to_encoder_request(&req_jcc, &enc_jcc);
-            unsigned int olen_jcc = 0;
-            xed_encode(&req_jcc, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), 15, &olen_jcc);
-            
-            // Second pass: Encode JMP with correct displacement
-            xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                                   (instr_map[instr_map_entry].new_ins_addr + olen_jcc + olen_jmp);
-            if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
-                cerr << "Invalid rip displacement for converted COND_BR\n";
-                return -1;
-            }
-            xed_encoder_instruction_t enc_jmp;
-            xed_inst1(&enc_jmp, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(new_disp, 32), 64));
-            xed_encoder_request_t req_jmp;
-            xed_encoder_request_zero_set_mode(&req_jmp, &dstate);
-            xed_convert_to_encoder_request(&req_jmp, &enc_jmp);
-            unsigned int olen_jmp_final = 0;
-            xed_encode(&req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_jcc), 15 - olen_jcc, &olen_jmp_final);
-            
-            return olen_jcc + olen_jmp_final;
+    if (category_enum != XED_CATEGORY_CALL && category_enum != XED_CATEGORY_UNCOND_BR) {
+        cerr << "note: untranslatable transfer to original target 0x" << hex
+             << instr_map[instr_map_entry].orig_targ_addr
+             << " - falling back to native execution for this image\n";
+        return -1;
     }
 
     xed_encoder_instruction_t  enc_instr_dummy;
