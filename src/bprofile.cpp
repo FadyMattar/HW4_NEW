@@ -1318,8 +1318,7 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
 
     xed_encoder_instruction_t  enc_instr;
     xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                       instr_map[instr_map_entry].new_ins_addr -
-                       xed_decoded_inst_get_length (&xedd);
+                       (instr_map[instr_map_entry].new_ins_addr + 6);
     if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
         cerr << "Invalid rip displacement larger than 32 bits in fix_direct_jmp_or_call_to_orig_addr\n";
         cerr << "new displacement: " << dec << new_disp << "\n";
