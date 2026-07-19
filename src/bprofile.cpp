@@ -1503,7 +1503,9 @@ int fix_instructions_displacements()
             }
 
             // fix instr displacement for direct jump or call:
+            cerr << "Fixing branch " << i << " orig addr: " << hex << instr_map[i].orig_ins_addr << dec << endl;
             new_size = fix_direct_jmp_or_call_displacement(i);
+            cerr << "Done fixing branch " << i << " new_size: " << new_size << endl;
             if (new_size) {
               if (new_size < 0)
                   return -1;
