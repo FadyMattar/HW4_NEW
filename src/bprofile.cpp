@@ -564,7 +564,7 @@ int disable_profiling_in_tc(instr_map_t * instr_map, unsigned num_of_instr_map_e
             // Calculate the jump displacement.
             unsigned j = 1;
             xed_int64_t disp = 0;
-            while (instr_map[i+j].ins_type == ProfilingIns) {
+            while (i+j < num_of_instr_map_entries && instr_map[i+j].ins_type == ProfilingIns) {
                 disp += instr_map[i+j].size;
                 j++;
             }
@@ -1061,7 +1061,7 @@ void chain_all_direct_jmp_and_call_target_entries(unsigned from_entry,
         ADDRINT orig_targ_addr = instr_map[i].orig_targ_addr;
         if (orig_targ_addr == 0)
             continue;
-        if (instr_map[i].targ_map_entry > 0)
+        if (instr_map[i].targ_map_entry >= 0)
             continue;
         if (!entry_map.count(orig_targ_addr))
             continue;
@@ -1169,6 +1169,28 @@ int fix_rip_displacement(unsigned instr_map_entry)
 }
 
 
+xed_iclass_enum_t get_reverted_iclass(xed_iclass_enum_t iclass_enum) {
+    switch (iclass_enum) {
+        case XED_ICLASS_JB: return XED_ICLASS_JNB;
+        case XED_ICLASS_JBE: return XED_ICLASS_JNBE;
+        case XED_ICLASS_JL: return XED_ICLASS_JNL;
+        case XED_ICLASS_JLE: return XED_ICLASS_JNLE;
+        case XED_ICLASS_JNB: return XED_ICLASS_JB;
+        case XED_ICLASS_JNBE: return XED_ICLASS_JBE;
+        case XED_ICLASS_JNL: return XED_ICLASS_JL;
+        case XED_ICLASS_JNLE: return XED_ICLASS_JLE;
+        case XED_ICLASS_JNO: return XED_ICLASS_JO;
+        case XED_ICLASS_JNP: return XED_ICLASS_JP;
+        case XED_ICLASS_JNS: return XED_ICLASS_JS;
+        case XED_ICLASS_JNZ: return XED_ICLASS_JZ;
+        case XED_ICLASS_JO: return XED_ICLASS_JNO;
+        case XED_ICLASS_JP: return XED_ICLASS_JNP;
+        case XED_ICLASS_JS: return XED_ICLASS_JNS;
+        case XED_ICLASS_JZ: return XED_ICLASS_JNZ;
+        default: return XED_ICLASS_INVALID;
+    }
+}
+
 /**************************************/
 /* fix_direct_jmp_or_call_to_orig_addr */
 /**************************************/
@@ -1236,6 +1258,65 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
          return -1;
       }
       jump_to_orig_addr_map[jump_to_orig_addr_map_entry] = instr_map[instr_map_entry].orig_targ_addr;
+    }
+
+    if (category_enum == XED_CATEGORY_COND_BR) {
+        xed_iclass_enum_t iclass_enum = xed_decoded_inst_get_iclass(&xedd);
+        if (iclass_enum == XED_ICLASS_JRCXZ) {
+            cerr << "note: untranslatable transfer (JRCXZ) to original target 0x" << hex
+                 << instr_map[instr_map_entry].orig_targ_addr << "\n";
+            return -1;
+        }
+
+        xed_iclass_enum_t reverted_iclass = get_reverted_iclass(iclass_enum);
+        if (reverted_iclass == XED_ICLASS_INVALID) {
+            cerr << "ERROR: unsupported cond jump iclass\n";
+            return -1;
+        }
+
+        xed_encoder_instruction_t enc_cond;
+        xed_inst1(&enc_cond, dstate, reverted_iclass, 64, xed_relbr(6, 8));
+        
+        xed_encoder_request_t enc_req_cond;
+        xed_encoder_request_zero_set_mode(&enc_req_cond, &dstate);
+        xed_bool_t convert_ok1 = xed_convert_to_encoder_request(&enc_req_cond, &enc_cond);
+        if (!convert_ok1) {
+            cerr << "conversion to encode request failed for cond branch\n";
+            return -1;
+        }
+        
+        unsigned int olen_cond = 0;
+        xed_error_enum_t xed_error = xed_encode(&enc_req_cond, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), ilen, &olen_cond);
+        if (xed_error != XED_ERROR_NONE) {
+            cerr << "ENCODE ERROR for cond branch: " << xed_error_enum_t2str(xed_error) << endl;
+            return -1;
+        }
+
+        xed_encoder_instruction_t enc_jmp;
+        xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
+                           (instr_map[instr_map_entry].new_ins_addr + olen_cond + 6);
+        if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
+            cerr << "Invalid rip displacement larger than 32 bits for cond jump tramp\n";
+            return -1;
+        }
+        
+        xed_inst1(&enc_jmp, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(new_disp, 32), 64));
+        xed_encoder_request_t enc_req_jmp;
+        xed_encoder_request_zero_set_mode(&enc_req_jmp, &dstate);
+        xed_bool_t convert_ok2 = xed_convert_to_encoder_request(&enc_req_jmp, &enc_jmp);
+        if (!convert_ok2) {
+            cerr << "conversion to encode request failed for cond branch tramp\n";
+            return -1;
+        }
+        
+        unsigned int olen_jmp = 0;
+        xed_error = xed_encode(&enc_req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_cond), ilen - olen_cond, &olen_jmp);
+        if (xed_error != XED_ERROR_NONE) {
+            cerr << "ENCODE ERROR for cond branch tramp: " << xed_error_enum_t2str(xed_error) << endl;
+            return -1;
+        }
+        
+        return olen_cond + olen_jmp;
     }
 
     if (category_enum != XED_CATEGORY_CALL && category_enum != XED_CATEGORY_UNCOND_BR) {
@@ -1710,21 +1791,27 @@ inline void commit_translated_rtns_to_tc()
 }
 
 bool tc_created_successfully = false;
+bool tc_creation_finished = false;
 
 /**********************************************/
 /* start_stop_profile_gathering_thread_func() */
 /**********************************************/
 void start_stop_profile_gathering_thread_func(void *v)
 {
-    // Wait prof_time seconds for the profiling to count
-    // execution frequency for each BBL.
-    cerr << " prof time: " << dec << KnobNumSecsDuringProfile << " sec\n";
-    sleep(KnobNumSecsDuringProfile);
+    // Wait for the translation phase (create_tc) to finish before starting the timer.
+    while (!tc_creation_finished) {
+        PIN_Sleep(100);
+    }
 
     if (!tc_created_successfully) {
         cerr << "TC creation aborted or incomplete, not disabling profiling.\n";
         return;
     }
+
+    // Wait prof_time seconds for the profiling to count
+    // execution frequency for each BBL.
+    cerr << " prof time: " << dec << KnobNumSecsDuringProfile << " sec\n";
+    sleep(KnobNumSecsDuringProfile);
 
     cerr << "disabling profile gathering\n";
 
@@ -1912,7 +1999,7 @@ VOID ExitInProbeMode(INT code)
 /*************/
 /* create_tc */
 /*************/
-VOID create_tc(IMG img, VOID *v)
+VOID create_tc_internal(IMG img, VOID *v)
 {
     // Insert a call to function Fini when raching the _exit routine.
     RTN exitRtn = RTN_FindByName(img, "_exit");
@@ -2006,7 +2093,11 @@ VOID create_tc(IMG img, VOID *v)
     tc_created_successfully = true;
 }
 
-
+VOID create_tc(IMG img, VOID *v)
+{
+    create_tc_internal(img, v);
+    tc_creation_finished = true;
+}
 
 /* ===================================================================== */
 /* Print Help Message                                                    */
