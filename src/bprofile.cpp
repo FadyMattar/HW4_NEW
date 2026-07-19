@@ -1217,7 +1217,7 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
     xed_decoded_inst_zero_set_mode(&xedd,&dstate);
 
     xed_error_enum_t xed_code =
-        xed_decode(&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), max_inst_len);
+        xed_decode(&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].orig_ins_addr), max_inst_len);
     if (xed_code != XED_ERROR_NONE) {
         cerr << "ERROR: xed decode failed for instr at: " << "0x"
              << hex << instr_map[instr_map_entry].new_ins_addr << endl;
@@ -1236,13 +1236,6 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
     unsigned ilen = XED_MAX_INSTRUCTION_BYTES;
     unsigned olen = 0;
 
-    // Use the heap variable instr_map[instr_map_entry].orig_targ_addr as the
-    // memory container that holds the target address for the jmp/call
-    // and indirectly jmp/call via that memory location.
-
-    // search for orig_targ_addr in jump_to_orig_addr_map.
-    // Search for the original target address in jump_to_orig_addr_map.
-    // Note: jump_to_orig_addr_map is 1-indexed because jump_to_orig_addr_num is incremented before assignment.
     int jump_to_orig_addr_map_entry = -1;
     for (unsigned i = 1; i <= jump_to_orig_addr_num; i++) {
       if (instr_map[instr_map_entry].orig_targ_addr == jump_to_orig_addr_map[i]) {
@@ -1274,19 +1267,12 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
             return -1;
         }
 
-        xed_encoder_instruction_t enc_cond;
-        xed_inst1(&enc_cond, dstate, reverted_iclass, 64, xed_relbr(6, 8));
-        
-        xed_encoder_request_t enc_req_cond;
-        xed_encoder_request_zero_set_mode(&enc_req_cond, &dstate);
-        xed_bool_t convert_ok1 = xed_convert_to_encoder_request(&enc_req_cond, &enc_cond);
-        if (!convert_ok1) {
-            cerr << "conversion to encode request failed for cond branch\n";
-            return -1;
-        }
+        xed_encoder_request_init_from_decode(&xedd);
+        xed_encoder_request_set_iclass(&xedd, reverted_iclass);
+        xed_encoder_request_set_branch_displacement(&xedd, 6, 1);
         
         unsigned int olen_cond = 0;
-        xed_error_enum_t xed_error = xed_encode(&enc_req_cond, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), ilen, &olen_cond);
+        xed_error_enum_t xed_error = xed_encode(&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), ilen, &olen_cond);
         if (xed_error != XED_ERROR_NONE) {
             cerr << "ENCODE ERROR for cond branch: " << xed_error_enum_t2str(xed_error) << endl;
             return -1;
