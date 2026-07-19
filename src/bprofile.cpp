@@ -1800,7 +1800,7 @@ void start_stop_profile_gathering_thread_func(void *v)
 {
     // Wait for the translation phase (create_tc) to finish before starting the timer.
     while (!tc_creation_finished) {
-        PIN_Sleep(100);
+        usleep(100000); // Wait 100ms
     }
 
     if (!tc_created_successfully) {
