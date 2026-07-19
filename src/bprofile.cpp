@@ -1141,14 +1141,14 @@ int fix_rip_displacement(unsigned instr_map_entry)
         return -1;
     }
 
+    // Converts the decoder request to a valid encoder request:
+    xed_encoder_request_init_from_decode (&xedd);
+
     // Set the memory displacement using a bit length.
     xed_encoder_request_set_memory_displacement (&xedd, new_disp, new_disp_byts);
 
     unsigned max_size = XED_MAX_INSTRUCTION_BYTES;
     unsigned new_size = 0;
-
-    // Converts the decoder request to a valid encoder request:
-    xed_encoder_request_init_from_decode (&xedd);
 
     xed_error_enum_t xed_error =
        xed_encode (&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins),
@@ -1261,51 +1261,44 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
             return -1;
         }
 
-        xed_iclass_enum_t reverted_iclass = get_reverted_iclass(iclass_enum);
-        if (reverted_iclass == XED_ICLASS_INVALID) {
-            cerr << "ERROR: unsupported cond jump iclass\n";
+    if (!instr_map[instr_map_entry].size) return 0;
+
+    if (category_enum == XED_CATEGORY_COND_BR || category_enum == XED_CATEGORY_UNCOND_BR) {
+        xed_int64_t new_disp = instr_map[instr_map_entry].orig_targ_addr - 
+                               (instr_map[instr_map_entry].new_ins_addr + instr_map[instr_map_entry].size);
+        
+        xed_uint_t new_disp_byts = 4;
+        
+        xed_iclass_enum_t iclass_enum = xed_decoded_inst_get_iclass(&xedd);
+        if (iclass_enum == XED_ICLASS_LOOP || iclass_enum == XED_ICLASS_LOOPE || iclass_enum == XED_ICLASS_LOOPNE) {
+            new_disp_byts = 1;
+        }
+        xed_iform_enum_t iform_enum = xed_decoded_inst_get_iform_enum(&xedd);
+        if (iform_enum == XED_IFORM_JRCXZ_RELBRb) {
+            new_disp_byts = 1;
+        }
+        
+        if (new_disp_byts == 1 && (new_disp > 127 || new_disp < -128)) {
+            cerr << "note: untranslatable short transfer to original target 0x" << hex
+                 << instr_map[instr_map_entry].orig_targ_addr
+                 << " - falling back to native execution for this image\n";
             return -1;
         }
-
+        
         xed_encoder_request_init_from_decode(&xedd);
-        xed_encoder_request_set_iclass(&xedd, reverted_iclass);
-        xed_encoder_request_set_branch_displacement(&xedd, 6, 1);
+        xed_encoder_request_set_branch_displacement(&xedd, new_disp, new_disp_byts);
         
-        unsigned int olen_cond = 0;
-        xed_error_enum_t xed_error = xed_encode(&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), ilen, &olen_cond);
+        unsigned int new_size = 0;
+        xed_error_enum_t xed_error = xed_encode(&xedd, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins), max_inst_len, &new_size);
         if (xed_error != XED_ERROR_NONE) {
-            cerr << "ENCODE ERROR for cond branch: " << xed_error_enum_t2str(xed_error) << endl;
-            return -1;
-        }
-
-        xed_encoder_instruction_t enc_jmp;
-        xed_int64_t new_disp = (ADDRINT)&jump_to_orig_addr_map[jump_to_orig_addr_map_entry] -
-                           (instr_map[instr_map_entry].new_ins_addr + olen_cond + 6);
-        if (new_disp > 0x7FFFFFFF || new_disp < -0x7FFFFFFF) {
-            cerr << "Invalid rip displacement larger than 32 bits for cond jump tramp\n";
+            cerr << "ENCODE ERROR for COND/UNCOND branch to orig addr: " << xed_error_enum_t2str(xed_error) << endl;
             return -1;
         }
         
-        xed_inst1(&enc_jmp, dstate, XED_ICLASS_JMP, 64, xed_mem_bd(XED_REG_RIP, xed_disp(new_disp, 32), 64));
-        xed_encoder_request_t enc_req_jmp;
-        xed_encoder_request_zero_set_mode(&enc_req_jmp, &dstate);
-        xed_bool_t convert_ok2 = xed_convert_to_encoder_request(&enc_req_jmp, &enc_jmp);
-        if (!convert_ok2) {
-            cerr << "conversion to encode request failed for cond branch tramp\n";
-            return -1;
-        }
-        
-        unsigned int olen_jmp = 0;
-        xed_error = xed_encode(&enc_req_jmp, reinterpret_cast<UINT8*>(instr_map[instr_map_entry].encoded_ins + olen_cond), ilen - olen_cond, &olen_jmp);
-        if (xed_error != XED_ERROR_NONE) {
-            cerr << "ENCODE ERROR for cond branch tramp: " << xed_error_enum_t2str(xed_error) << endl;
-            return -1;
-        }
-        
-        return olen_cond + olen_jmp;
+        return new_size;
     }
 
-    if (category_enum != XED_CATEGORY_CALL && category_enum != XED_CATEGORY_UNCOND_BR) {
+    if (category_enum != XED_CATEGORY_CALL) {
         cerr << "note: untranslatable transfer to original target 0x" << hex
              << instr_map[instr_map_entry].orig_targ_addr
              << " - falling back to native execution for this image\n";
@@ -1472,8 +1465,14 @@ int fix_instructions_displacements()
 
     int size_diff = 0;
     bool is_diff = false;
+    int pass_count = 0;
 
     do {
+        pass_count++;
+        if (pass_count > 50) {
+            cerr << "ERROR: Infinite loop in fix_instructions_displacements detected!" << endl;
+            return -1;
+        }
 
         size_diff = 0;
         is_diff = false;
@@ -1492,6 +1491,9 @@ int fix_instructions_displacements()
               if (new_size < 0)
                   return -1;
               if (instr_map[i].size != (unsigned)new_size) { // this was a rip-based instruction which was fixed.
+                  if (pass_count > 45) {
+                      cerr << "Pass " << pass_count << ": RIP instr " << i << " changed size from " << instr_map[i].size << " to " << new_size << endl;
+                  }
                   if (instr_map[i].size < (unsigned)new_size)
                      size_diff += (new_size - instr_map[i].size);
                   else
@@ -1503,13 +1505,14 @@ int fix_instructions_displacements()
             }
 
             // fix instr displacement for direct jump or call:
-            cerr << "Fixing branch " << i << " orig addr: " << hex << instr_map[i].orig_ins_addr << dec << endl;
             new_size = fix_direct_jmp_or_call_displacement(i);
-            cerr << "Done fixing branch " << i << " new_size: " << new_size << endl;
             if (new_size) {
               if (new_size < 0)
                   return -1;
               if (instr_map[i].size != (unsigned)new_size) {
+                if (pass_count > 45) {
+                    cerr << "Pass " << pass_count << ": Branch instr " << i << " changed size from " << instr_map[i].size << " to " << new_size << endl;
+                }
                 if (instr_map[i].size < (unsigned)new_size)
                    size_diff += (new_size - instr_map[i].size);
                 else
