@@ -1253,14 +1253,6 @@ int fix_direct_jmp_or_call_to_orig_addr(unsigned instr_map_entry)
       jump_to_orig_addr_map[jump_to_orig_addr_map_entry] = instr_map[instr_map_entry].orig_targ_addr;
     }
 
-    if (category_enum == XED_CATEGORY_COND_BR) {
-        xed_iclass_enum_t iclass_enum = xed_decoded_inst_get_iclass(&xedd);
-        if (iclass_enum == XED_ICLASS_JRCXZ) {
-            cerr << "note: untranslatable transfer (JRCXZ) to original target 0x" << hex
-                 << instr_map[instr_map_entry].orig_targ_addr << "\n";
-            return -1;
-        }
-
     if (!instr_map[instr_map_entry].size) return 0;
 
     if (category_enum == XED_CATEGORY_COND_BR || category_enum == XED_CATEGORY_UNCOND_BR) {
